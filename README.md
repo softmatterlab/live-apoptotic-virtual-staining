@@ -10,7 +10,7 @@ This project is powered by [DeepTrack 2.0](https://github.com/softmatterlab/Deep
 
 ## Installation
 
-Clone the repository using `git clone https://github.com/softmatterlab/Live-dead-virtual-staining`
+Clone the repository using `git clone https://github.com/softmatterlab/Live-apoptotic-virtual-staining`
 
 ### Installing dependencies using pip
 
