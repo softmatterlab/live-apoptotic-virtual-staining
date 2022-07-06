@@ -1,0 +1,22 @@
+{
+  "generator_depth": 6,
+  "generator_breadth": 16,
+  "discriminator_depth": 5,
+  "batch_size": 8,
+  "min_data_size": 1024,
+  "max_data_size": 1025,
+  "augmentation_dict": {
+    "FlipLR": {},
+    "Affine": {
+      "rotate": "lambda: np.random.rand() * 2 * np.pi"
+    }
+  },
+  "mae_loss_weight": 0.8,
+  "content_loss_weight": 0.5,
+  "path_to_dataset": "C:/GU/GitHub/Live-dead-staining/datasets",
+  "dataset": "Caspase",
+  "content_discriminator": "DenseNet121",
+  "epochs": 5,
+  "patience": 100,
+  "repet": 400
+}

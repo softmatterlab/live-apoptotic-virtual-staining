@@ -1,0 +1,10 @@
+opencv-python
+opencv-contrib-python
+setuptools
+numpy
+scikit-learn
+scikit-image
+scipy
+pillow
+tensorflow-addons
+pint
