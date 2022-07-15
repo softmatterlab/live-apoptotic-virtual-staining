@@ -12,18 +12,6 @@ from dlci import deeptrack as dt
 _PATH_TO_DATASET = "data"
 _PATH_TO_MODELS = "/virtual staining/models"
 
-_MASK_RCNNN_SETUP = {
-    "NAME": "cells",
-    "IMAGES_PER_GPU": 1,
-    "IMAGE_CHANNEL_COUNT": 1,
-    "BACKBONE": "resnet101",
-    "RPN_ANCHOR_SCALES": (16, 24, 32, 48, 64),
-    "DETECTION_MAX_INSTANCES": 400,
-    "DETECTION_MIN_CONFIDENCE": 0.98,
-    "NUM_CLASSES": 2,
-    "MEAN_PIXEL": np.array([0]),
-}
-
 # Grab passed arguments
 opts, args = getopt.getopt(sys.argv[1:], "i:t:s:")
 
@@ -56,20 +44,6 @@ caspase.compile(loss="mae")
 print("")
 print("=" * 50, "START", "=" * 50)
 
-inference_config = dlci.Config(**_MASK_RCNNN_SETUP)
-
-counter = dlci.DT_MaskRCNN(
-    mode="inference",
-    config=inference_config,
-    model_dir=os.path.join(_PATH_TO_MODELS, "model_cellcount"),
-)
-counter.load_weights(
-    filepath=glob.glob(
-        os.path.join(_PATH_TO_MODELS, "model_cellcount", "*.h5")
-    )[0],
-    by_name=True,
-)
-
 network = (
     dt.Lambda(
         lambda: lambda image: [
@@ -101,9 +75,6 @@ for site in SITES:
             os.makedirs(folder_path)
 
     print("Analyzing sample {}... saving to {}".format(site, folder_path))
-
-    annotations_calcein = []
-    annotations_caspase = []
 
     for idx, file in enumerate(_filenames):
 
@@ -152,36 +123,3 @@ for site in SITES:
                     file.split("\\")[2].replace("ch00", "ch01"),
                 )
             )
-
-        results_calcein = counter.detect([image_calcein[0, ...]], verbose=0)
-        positions = dlci.get_positions(results_calcein)
-        annotations_calcein.append(
-            dlci.get_annonations(
-                file=file.split("\\")[2].replace("ch00", "ch01"),
-                positions=positions,
-            )
-        )
-
-        results_caspase = counter.detect([image_caspase[0, ...]], verbose=0)
-        positions = dlci.get_positions(results_caspase)
-        annotations_caspase.append(
-            dlci.get_annonations(
-                file=file.split("\\")[2].replace("ch00", "ch01"),
-                positions=positions,
-            )
-        )
-
-    annotations = [annotations_calcein, annotations_caspase]
-    for idx, _type in enumerate(("calcein", "caspase")):
-        with open(
-            os.path.join(
-                _PATH_TO_DATASET,
-                "set " + args["set"],
-                "results",
-                site,
-                _type,
-                "detections.json",
-            ),
-            "w",
-        ) as outfile:
-            json.dump(annotations[idx], outfile, cls=dlci.NumpyEncoder)
