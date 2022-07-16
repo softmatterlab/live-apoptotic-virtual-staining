@@ -1,120 +1,116 @@
-import os
-from .mrcnn import MaskRCNN
-from dlci import mrcnn
+from . import deeptrack as dt
+from tensorflow.keras import layers
 
-from tensorflow import keras
-
-
-class Config(mrcnn.Config):
-    def __init__(self, **kwargs):
-        for key, val in kwargs.items():
-            self.__dict__[key] = val
-        super().__init__()
+from tensorflow.keras.initializers import RandomNormal
 
 
-class DT_MaskRCNN(MaskRCNN):
-    def train(
-        self,
-        train_dataset,
-        val_dataset,
-        learning_rate,
-        epochs,
-        layers,
-        augmentation=None,
-        custom_callbacks=None,
-        no_augmentation_sources=None,
-    ):
-        """Train the model.
-        train_dataset, val_dataset: Training and validation Dataset objects.
-        learning_rate: The learning rate to train with
-        epochs: Number of training epochs. Note that previous training epochs
-                are considered to be done alreay, so this actually determines
-                the epochs to train in total rather than in this particaular
-                call.
-        layers: Allows selecting wich layers to train. It can be:
-            - A regular expression to match layer names to train
-            - One of these predefined values:
-              heads: The RPN, classifier and mask heads of the network
-              all: All the layers
-              3+: Train Resnet stage 3 and up
-              4+: Train Resnet stage 4 and up
-              5+: Train Resnet stage 5 and up
-        augmentation: Optional. An imgaug (https://github.com/aleju/imgaug)
-            augmentation. For example, passing imgaug.augmenters.Fliplr(0.5)
-            flips images right/left 50% of the time. You can pass complex
-            augmentations as well. This augmentation applies 50% of the
-            time, and when it does it flips images right/left half the time
-            and adds a Gaussian blur with a random sigma in range 0 to 5.
-                augmentation = imgaug.augmenters.Sometimes(0.5, [
-                    imgaug.augmenters.Fliplr(0.5),
-                    imgaug.augmenters.GaussianBlur(sigma=(0.0, 5.0))
-                ])
-        custom_callbacks: Optional. Add custom callbacks to be called
-        with the keras fit_generator method. Must be list of type keras.callbacks.
-        no_augmentation_sources: Optional. List of sources to exclude for
-            augmentation. A source is string that identifies a dataset and is
-            defined in the Dataset class.
-        """
-        assert self.mode == "training", "Create model in training mode."
+def generator(breadth, depth):
+    """Creates a u-net generator that
+    * Uses concatenation skip steps in the encoder
+    * Uses maxpooling for downsampling
+    * Uses resnet block for the base block
+    * Uses instance normalization and leaky relu.
+    Parameters
+    ----------
+    breadth : int
+        Number of features in the top level. Each sequential level of the u-net
+        increases the number of features by a factor of two.
+    depth : int
+        Number of levels to the u-net. If `n`, then there will be `n-1` pooling layers.
+    """
 
-        # Pre-defined layer regular expressions
-        layer_regex = {
-            # all layers but the backbone
-            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            # From a specific Resnet stage and up
-            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            # All layers
-            "all": ".*",
-        }
-        if layers in layer_regex.keys():
-            layers = layer_regex[layers]
+    kernel_initializer = RandomNormal(mean=0.0, stddev=0.02)
 
-        # Data generators
-        train_generator = train_dataset
-        val_generator = val_dataset
+    activation = layers.LeakyReLU(0.2)
 
-        # Create log_dir if it does not exist
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+    convolution_block = dt.layers.ConvolutionalBlock(
+        activation=activation,
+        instance_norm=True,
+        kernel_initializer=kernel_initializer,
+    )
 
-        # Callbacks
-        callbacks = [
-            keras.callbacks.TensorBoard(
-                log_dir=self.log_dir,
-                histogram_freq=0,
-                write_graph=True,
-                write_images=False,
-            ),
-            keras.callbacks.ModelCheckpoint(
-                self.checkpoint_path, verbose=0, save_weights_only=True
-            ),
-        ]
+    base_block = dt.layers.ResidualBlock(
+        activation=activation, kernel_initializer=kernel_initializer
+    )
 
-        # Add custom callbacks to the list
-        if custom_callbacks:
-            callbacks += custom_callbacks
+    pooling_block = dt.layers.ConvolutionalBlock(
+        strides=2,
+        activation=activation,
+        instance_norm=True,
+        kernel_initializer=kernel_initializer,
+    )
 
-        # Train
-        # log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
-        # log("Checkpoint Path: {}".format(self.checkpoint_path))
-        self.set_trainable(layers)
-        self.compile(learning_rate, self.config.LEARNING_MOMENTUM)
+    upsample_block = dt.layers.StaticUpsampleBlock(
+        kernel_size=3,
+        instance_norm=True,
+        activation=activation,
+        with_conv=False,
+        kernel_initializer=kernel_initializer,
+    )
 
-        # # Work-around for Windows: Keras fails on Windows when using
-        # # multiprocessing workers. See discussion here:
-        # # https://github.com/matterport/Mask_RCNN/issues/13#issuecomment-353124009
-        # if os.name == 'nt':
-        #     workers = 0
-        # else:
-        #     workers = multiprocessing.cpu_count()
+    return dt.models.unet(
+        input_shape=(None, None, 1),
+        conv_layers_dimensions=list(
+            breadth * 2 ** n for n in range(depth - 1)
+        ),
+        base_conv_layers_dimensions=(breadth * 2 ** (depth - 1),),
+        output_conv_layers_dimensions=(
+            breadth,
+            breadth // 2,
+        ),
+        steps_per_pooling=2,
+        number_of_outputs=1,
+        output_kernel_size=1,
+        output_activation="tanh",
+        encoder_convolution_block=convolution_block,
+        decoder_convolution_block=convolution_block,
+        base_convolution_block=base_block,
+        pooling_block=pooling_block,
+        upsampling_block=upsample_block,
+        output_convolution_block=convolution_block,
+    )
 
-        self.keras_model.fit(
-            train_generator,
-            initial_epoch=self.epoch,
-            epochs=epochs,
-            callbacks=callbacks,
-            validation_data=val_generator,
-        )
-        self.epoch = max(self.epoch, epochs)
+
+def discriminator(depth):
+    """Creates a patch discriminator according to the specifications in the paper.
+    Parameters
+    ----------
+    depth : int
+        Number of levels to the model.
+    """
+
+    activation = layers.LeakyReLU(0.2)
+
+    discriminator_convolution_block = dt.layers.ConvolutionalBlock(
+        kernel_size=(4, 4),
+        strides=1,
+        activation=activation,
+        instance_norm=lambda x: (
+            False
+            if x == 16
+            else {"axis": -1, "center": False, "scale": False},
+        ),
+    )
+
+    discriminator_pooling_block = dt.layers.ConvolutionalBlock(
+        kernel_size=(4, 4),
+        strides=2,
+        activation=activation,
+        instance_norm={"axis": -1, "center": False, "scale": False},
+    )
+
+    return dt.models.convolutional(
+        input_shape=[
+            (None, None, 1),
+            (None, None, 1),
+        ],  # shape of the input
+        conv_layers_dimensions=[16 * 2 ** n for n in range(depth)],
+        dense_layers_dimensions=(),  # number of neurons in each dense layer
+        # number of neurons in the final dense step (numebr of output values)
+        number_of_outputs=1,
+        compile=False,
+        output_kernel_size=4,
+        dense_top=False,
+        convolution_block=discriminator_convolution_block,
+        pooling_block=discriminator_pooling_block,
+    )
